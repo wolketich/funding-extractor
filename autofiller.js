@@ -1,5 +1,11 @@
 // CSV Data Filler for Child Care Management System
 (function() {
+    // Track global state
+    const state = {
+      childrenByChick: {},
+      totalMatches: 0
+    };
+    
     // Create UI elements for file upload and status
     createUI();
     
@@ -12,13 +18,13 @@
         const data = parseCSV(csv);
         
         // Create a lookup object for easy access to child data by CHICK code
-        const childrenByChick = {};
+        state.childrenByChick = {};
         data.forEach(row => {
-          childrenByChick[row['CHICK']] = row;
+          state.childrenByChick[row['CHICK']] = row;
         });
         
         // Process the table rows
-        processTableRows(childrenByChick);
+        processTableRows();
       };
       
       reader.onerror = function() {
@@ -46,7 +52,7 @@
     }
     
     // Process table rows and fill in data
-    function processTableRows(childrenByChick) {
+    function processTableRows() {
       const table = document.querySelector("#main-body > div.container > form > div:nth-child(2) > table");
       
       if (!table) {
@@ -63,16 +69,21 @@
       }
       
       updateStatus(`Found ${rows.length} rows to process`, 'info');
+      state.totalMatches = 0;
       
       // Process rows sequentially
-      processRowsSequentially(rows, 0, childrenByChick, 0);
+      processRowsSequentially(rows, 0);
     }
     
     // Process rows one by one
-    function processRowsSequentially(rows, currentIndex, childrenByChick, matchCount) {
+    function processRowsSequentially(rows, currentIndex) {
+      // Remove any existing selection dialogs
+      const oldDialogs = document.querySelectorAll('.csv-filler-modal');
+      oldDialogs.forEach(dialog => document.body.removeChild(dialog));
+      
       // Stop if we've processed all rows
       if (currentIndex >= rows.length) {
-        updateStatus(`Successfully processed ${matchCount} records`, 'success');
+        updateStatus(`Successfully processed ${state.totalMatches} records`, 'success');
         return;
       }
       
@@ -81,37 +92,43 @@
       
       if (!chickCell) {
         // Skip this row and move to the next
-        processRowsSequentially(rows, currentIndex + 1, childrenByChick, matchCount);
+        processRowsSequentially(rows, currentIndex + 1);
         return;
       }
       
       const chickCode = chickCell.textContent.trim();
       
       // Check if this CHICK exists in our CSV data
-      if (childrenByChick[chickCode]) {
-        const childData = childrenByChick[chickCode];
+      if (state.childrenByChick[chickCode]) {
+        const childData = state.childrenByChick[chickCode];
         
         // Handle Weekly Total with multiple values
         const weeklyTotal = childData['Weekly Total'];
         
         if (weeklyTotal && weeklyTotal.includes('/')) {
           // Create a selection dialog for multiple weekly total values
-          const values = weeklyTotal.split('/');
-          showWeeklyTotalSelector(currentIndex, chickCode, values, childData, (selectedValue) => {
+          showWeeklyTotalSelector(currentIndex, chickCode, weeklyTotal.split('/'), childData, (selectedValue) => {
             fillRowData(currentIndex, childData, selectedValue);
+            state.totalMatches++;
             // Continue with the next row after selection
-            processRowsSequentially(rows, currentIndex + 1, childrenByChick, matchCount + 1);
+            setTimeout(() => {
+              processRowsSequentially(rows, currentIndex + 1);
+            }, 300);
           });
           return;
         }
         
-        // Fill in data for the row
+        // Fill in data for the row with a single value
         fillRowData(currentIndex, childData, weeklyTotal);
-        // Continue with the next row
-        processRowsSequentially(rows, currentIndex + 1, childrenByChick, matchCount + 1);
+        state.totalMatches++;
+        
+        // Short delay to allow user to see the row being filled
+        setTimeout(() => {
+          processRowsSequentially(rows, currentIndex + 1);
+        }, 100);
       } else {
         // No match for this row, move to the next
-        processRowsSequentially(rows, currentIndex + 1, childrenByChick, matchCount);
+        processRowsSequentially(rows, currentIndex + 1);
       }
     }
     
@@ -127,7 +144,7 @@
           return;
         }
         
-        // Get input fields using exact selectors now that we know the structure
+        // Get input fields using exact selectors
         const startDateInput = row.querySelector(`input[name="ncs_rows[${rowIndex}][date_from]"]`);
         const weeklyTotalInput = row.querySelector(`input[name="ncs_rows[${rowIndex}][weekly_total]"]`);
         const hourRateInput = row.querySelector(`input[name="ncs_rows[${rowIndex}][hour_rate]"]`);
@@ -145,15 +162,16 @@
         if (hourRateInput) {
           // Properly handle currency symbols by extracting only numbers and decimal point
           let hourRate = childData['Hour rate'] || '';
-          // Convert to string if it's not already
           hourRate = String(hourRate);
-          // Remove all non-numeric characters except the decimal point
           hourRate = hourRate.replace(/[^0-9.]/g, '');
           hourRateInput.value = hourRate;
           hourRateInput.dispatchEvent(new Event('change', { bubbles: true }));
         }
         
         highlightRow(rowIndex, 'success');
+        
+        // Scroll row into view
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
       } catch (error) {
         console.error('Error filling row data:', error);
         highlightRow(rowIndex, 'error');
@@ -162,23 +180,40 @@
     
     // Show selector dialog for multiple Weekly Total values
     function showWeeklyTotalSelector(rowIndex, chickCode, values, childData, callback) {
-      // Scroll to make sure the row is visible
+      // Get row to position the modal near it
       const table = document.querySelector("#main-body > div.container > form > div:nth-child(2) > table");
       const row = table.querySelector(`tbody > tr:nth-child(${rowIndex + 1})`);
+      
       if (row) {
+        // Scroll row into view
         row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        
+        // Add a small delay to ensure scrolling completes before showing the modal
+        setTimeout(() => {
+          createSelectionDialog(rowIndex, chickCode, values, childData, callback);
+        }, 300);
+      } else {
+        createSelectionDialog(rowIndex, chickCode, values, childData, callback);
       }
       
-      // Create a cleaner modal that shows next to the row
+      // Highlight the current row
+      highlightRow(rowIndex, 'pending');
+    }
+    
+    // Create the selection dialog
+    function createSelectionDialog(rowIndex, chickCode, values, childData, callback) {
+      // Get row position to place the modal nearby
+      const table = document.querySelector("#main-body > div.container > form > div:nth-child(2) > table");
+      const row = table.querySelector(`tbody > tr:nth-child(${rowIndex + 1})`);
+      const rowRect = row.getBoundingClientRect();
+      
+      // Create a modal dialog
       const modal = document.createElement('div');
       modal.className = 'csv-filler-modal';
       
-      // Get row position to place the modal nearby
-      const rowRect = row.getBoundingClientRect();
-      
-      // Position the modal to the right of the table
+      // Position the modal to the right of the table, accounting for scroll position
       const modalLeft = Math.min(rowRect.right + 20, window.innerWidth - 320); // Avoid going off-screen
-      const modalTop = rowRect.top;
+      const modalTop = window.scrollY + rowRect.top;
       
       modal.style.cssText = `
         position: absolute;
@@ -194,14 +229,29 @@
         animation: fadeIn 0.2s ease-out;
       `;
       
-      const header = document.createElement('h3');
-      header.textContent = `Weekly Total Options`;
-      header.style.cssText = 'margin:0 0 8px 0;font-size:16px;color:#444;';
-      modal.appendChild(header);
+      // Create header bar with title and drag handle
+      const headerBar = document.createElement('div');
+      headerBar.style.cssText = 'display:flex;justify-content:space-between;align-items:center;cursor:move;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #eee;';
+      
+      const title = document.createElement('h3');
+      title.textContent = `Weekly Total Options`;
+      title.style.cssText = 'margin:0;font-size:16px;color:#444;';
+      headerBar.appendChild(title);
+      
+      // Add handle visual
+      const dragHandle = document.createElement('div');
+      dragHandle.innerHTML = '⋮⋮';
+      dragHandle.style.cssText = 'color:#999;font-size:16px;';
+      headerBar.appendChild(dragHandle);
+      
+      modal.appendChild(headerBar);
+      
+      // Make the modal draggable
+      makeElementDraggable(modal, headerBar);
       
       const childInfo = document.createElement('p');
       childInfo.textContent = `${childData['Child']} (${chickCode})`;
-      childInfo.style.cssText = 'margin:0 0 12px 0;font-size:14px;color:#666;border-bottom:1px solid #eee;padding-bottom:8px;';
+      childInfo.style.cssText = 'margin:0 0 12px 0;font-size:14px;color:#666;';
       modal.appendChild(childInfo);
       
       const description = document.createElement('p');
@@ -272,10 +322,10 @@
       
       modal.appendChild(optionsList);
       
-      // Add cancel button
-      const cancelButton = document.createElement('button');
-      cancelButton.textContent = 'Skip This Row';
-      cancelButton.style.cssText = `
+      // Add skip button with fixed functionality
+      const skipButton = document.createElement('button');
+      skipButton.textContent = 'Skip This Row';
+      skipButton.style.cssText = `
         width: 100%;
         padding: 8px;
         background-color: #f44336;
@@ -286,29 +336,66 @@
         transition: background-color 0.2s;
       `;
       
-      cancelButton.addEventListener('mouseover', () => {
-        cancelButton.style.backgroundColor = '#d32f2f';
+      skipButton.addEventListener('mouseover', () => {
+        skipButton.style.backgroundColor = '#d32f2f';
       });
       
-      cancelButton.addEventListener('mouseout', () => {
-        cancelButton.style.backgroundColor = '#f44336';
+      skipButton.addEventListener('mouseout', () => {
+        skipButton.style.backgroundColor = '#f44336';
       });
       
-      cancelButton.addEventListener('click', () => {
+      skipButton.addEventListener('click', () => {
         document.body.removeChild(modal);
-        // Continue processing with the next row
+        
+        // Get all rows again to continue processing from the next row
         const table = document.querySelector("#main-body > div.container > form > div:nth-child(2) > table");
         const rows = table.querySelectorAll('tbody > tr');
-        processRowsSequentially(rows, rowIndex + 1, {}, 0); // Empty object since we're skipping
+        
+        // Continue with the next row
+        setTimeout(() => {
+          processRowsSequentially(rows, rowIndex + 1);
+        }, 100);
       });
       
-      modal.appendChild(cancelButton);
-      
-      // Add to body
+      modal.appendChild(skipButton);
       document.body.appendChild(modal);
+    }
+    
+    // Make an element draggable
+    function makeElementDraggable(element, handle) {
+      let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
       
-      // Highlight the current row
-      highlightRow(rowIndex, 'pending');
+      handle.onmousedown = dragMouseDown;
+      
+      function dragMouseDown(e) {
+        e = e || window.event;
+        e.preventDefault();
+        // Get the mouse cursor position at startup
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+        document.onmouseup = closeDragElement;
+        // Call a function whenever the cursor moves
+        document.onmousemove = elementDrag;
+      }
+      
+      function elementDrag(e) {
+        e = e || window.event;
+        e.preventDefault();
+        // Calculate the new cursor position
+        pos1 = pos3 - e.clientX;
+        pos2 = pos4 - e.clientY;
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+        // Set the element's new position
+        element.style.top = (element.offsetTop - pos2) + "px";
+        element.style.left = (element.offsetLeft - pos1) + "px";
+      }
+      
+      function closeDragElement() {
+        // Stop moving when mouse button is released
+        document.onmouseup = null;
+        document.onmousemove = null;
+      }
     }
     
     // Highlight a row to indicate status
@@ -416,44 +503,6 @@
           minimizeButton.title = 'Minimize';
           container.style.padding = '15px';
         }
-      }
-    }
-    
-    // Make an element draggable
-    function makeElementDraggable(element, dragHandle) {
-      let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
-      
-      dragHandle.onmousedown = dragMouseDown;
-      
-      function dragMouseDown(e) {
-        e = e || window.event;
-        e.preventDefault();
-        // Get the mouse cursor position at startup
-        pos3 = e.clientX;
-        pos4 = e.clientY;
-        document.onmouseup = closeDragElement;
-        // Call a function whenever the cursor moves
-        document.onmousemove = elementDrag;
-      }
-      
-      function elementDrag(e) {
-        e = e || window.event;
-        e.preventDefault();
-        // Calculate the new cursor position
-        pos1 = pos3 - e.clientX;
-        pos2 = pos4 - e.clientY;
-        pos3 = e.clientX;
-        pos4 = e.clientY;
-        // Set the element's new position
-        element.style.top = (element.offsetTop - pos2) + "px";
-        element.style.left = (element.offsetLeft - pos1) + "px";
-        element.style.right = "auto";
-      }
-      
-      function closeDragElement() {
-        // Stop moving when mouse button is released
-        document.onmouseup = null;
-        document.onmousemove = null;
       }
     }
     
