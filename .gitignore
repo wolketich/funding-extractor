@@ -172,3 +172,22 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Any Log Files or Output
+*.log
+*.out
+*.err
+*.pid
+*.pid.lock
+*.xlsx
+*.csv
+*.json
+*.xml
+*.html
+*.txt
+*.zip
+*.tar
+*.tar.gz
+/input
+/output
+

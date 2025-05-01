@@ -148,7 +148,7 @@ def find_potential_matches(name: str, system_names: List[str], max_matches: int 
     system_names : List[str]
         List of names in the main system
     max_matches : int
-        Maximum number of matches to return
+        Maximum number of matches to return (default 5, but will return up to 15 when single-word matches)
         
     Returns:
     --------
@@ -179,7 +179,11 @@ def find_potential_matches(name: str, system_names: List[str], max_matches: int 
     # Sort by number of matching words (descending)
     matches.sort(key=lambda x: x[1], reverse=True)
     
-    return matches[:max_matches]
+    # If the best match only has 1 matching word, return more options (up to 15)
+    if matches and matches[0][1] == 1:
+        return matches[:15]  # Return more options for single-word matches
+    
+    return matches[:max_matches]  # Otherwise return the default number
 
 
 def interactive_matching(unmatched_children: List[Dict], system_names: List[str]) -> Dict[str, str]:
@@ -229,14 +233,17 @@ def interactive_matching(unmatched_children: List[Dict], system_names: List[str]
         if chick:
             print(f"CHICK: {chick}")
         
-        # Get potential matches
+        # Get potential matches - potentially more if only single-word matches
         potential_matches = find_potential_matches(child_name, system_names)
         
         # Display possible matches in the requested format
         print("\nPossible Matches")
         
         for i, (match_name, word_count) in enumerate(potential_matches, 1):
-            print(f"{i}) {match_name}")
+            match_info = f"{match_name}"
+            if word_count == 1:
+                match_info += f" (single-word match)"  # Indicate single-word matches
+            print(f"{i}) {match_info}")
         
         # Add the skip option
         print(f"\n0) No Match (skip)")
@@ -262,7 +269,7 @@ def interactive_matching(unmatched_children: List[Dict], system_names: List[str]
                 else:
                     print_status("Invalid selection. Try again.", "error")
             except ValueError:
-                print_status("Please enter a number (0-5)", "error")
+                print_status("Please enter a number between 0 and " + str(len(potential_matches)), "error")
     
     # Show final summary
     clear_screen()
@@ -379,13 +386,13 @@ def extract_funding_data(children_file: str, funding_file: str, system_file: str
             # Convert dates column to datetime safely
             try:
                 # First try to convert using default format
-                date_col = pd.to_datetime(child_funding[alloc_date_col], errors='coerce')
+                date_col = pd.to_datetime(child_funding[alloc_date_col], errors='coerce', dayfirst=True)
                 
                 # If that fails, try different common formats
                 if date_col.isna().all():
                     for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y']:
                         try:
-                            date_col = pd.to_datetime(child_funding[alloc_date_col], format=fmt, errors='coerce')
+                            date_col = pd.to_datetime(child_funding[alloc_date_col], format=fmt, errors='coerce', dayfirst=True)
                             if not date_col.isna().all():
                                 break
                         except:
@@ -462,7 +469,8 @@ def extract_funding_data(children_file: str, funding_file: str, system_file: str
             match_results = find_potential_matches(child_name, system_names)
             potential_matches = [name for name, _ in match_results]
             
-            # Add to unmatched list
+            # Store just the first 5 matches in the unmatched list
+            # (all potential matches will be shown during interactive matching)
             unmatched_rows.append({
                 'Child Name': child_name,
                 'CHICK': chick,
@@ -608,21 +616,21 @@ def main():
         
         # Create basic child information file (File 1)
         basic_info_df = result_df[['Child', 'CHICK', 'Date of Birth', 'Claim Until']].copy()
-        basic_output_path = os.path.join(args.output_dir, "forChildPathsUpload.xlsx")
+        basic_output_path = os.path.join(args.output_dir, "toChildPathsUploader.xlsx")
         basic_info_df.to_excel(basic_output_path, index=False)
         print_status(f"Basic child information saved to {basic_output_path}", "success")
         
         # Create complete funding information file (File 2)
         complete_info_df = result_df[['Child', 'CHICK', 'Date of Birth', 'Claim Until', 
                                      'Start date', 'Weekly Total', 'Hour rate']].copy()
-        complete_output_path = os.path.join(args.output_dir, "forAutoFiller.xlsx")
-        complete_info_df.to_excel(complete_output_path, index=False)
+        complete_output_path = os.path.join(args.output_dir, "forAutoFiller.csv")
+        complete_info_df.to_csv(complete_output_path, index=False, encoding='utf-8-sig')
         print_status(f"Complete funding information saved to {complete_output_path}", "success")
         
         # Save unmatched report if there are any unmatched children
         if not unmatched_df.empty:
-            unmatched_output_path = os.path.join(args.output_dir, "unmatchedChildren.xlsx")
-            unmatched_df.to_excel(unmatched_output_path, index=False)
+            unmatched_output_path = os.path.join(args.output_dir, "unmatchedChildren.csv")
+            unmatched_df.to_csv(unmatched_output_path, index=False)
             print_status(f"Unmatched children report saved to {unmatched_output_path}", "success")
         
     except Exception as e:
