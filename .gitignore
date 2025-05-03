@@ -191,3 +191,12 @@ cython_debug/
 /input
 /output
 
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+# Thumbnails
+._*
+
+

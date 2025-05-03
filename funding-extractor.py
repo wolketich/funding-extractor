@@ -413,9 +413,21 @@ def extract_funding_data(children_file: str, funding_file: str, system_file: str
             
             # Find start date (earliest allocation date minus 6 days)
             min_date = child_funding['date_converted'].min()
-            if not pd.isna(min_date):
-                # Adjust from Sunday to Monday (subtract 6 days)
-                start_date = (min_date - timedelta(days=6))
+            claim_until_date = pd.to_datetime(claim_until, errors='coerce') if claim_until else None
+
+            if not pd.isna(min_date) and not pd.isna(claim_until_date):
+                # Calculate CHICK start (expiry - 363 days, then round to Monday)
+                chick_start = claim_until_date - timedelta(days=363)
+                chick_start -= timedelta(days=chick_start.weekday())
+
+                if min_date > claim_until_date:
+                    start_date = "ERROR: allocation after expiry"
+                elif chick_start <= min_date <= claim_until_date:
+                    start_date = min_date.date()
+                else:
+                    start_date = chick_start.date()
+            else:
+                start_date = None  # or handle/log missing dates
             
             # Filter allocations to only include current or future ones
             # Safely compare dates - convert datetime to date objects first
@@ -471,6 +483,7 @@ def extract_funding_data(children_file: str, funding_file: str, system_file: str
             
             # Store just the first 5 matches in the unmatched list
             # (all potential matches will be shown during interactive matching)
+
             unmatched_rows.append({
                 'Child Name': child_name,
                 'CHICK': chick,
