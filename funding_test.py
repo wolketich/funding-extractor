@@ -19,9 +19,8 @@ import os
 import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional
-from collections import Counter
 
-# Terminal formatting
+
 class Colors:
     HEADER = '\033[95m'
     BLUE = '\033[94m'
@@ -50,7 +49,7 @@ def normalize_name(name: str) -> str:
 def clean_name(name: str) -> str:
     if not isinstance(name, str):
         return ""
-    name = re.sub(r'(?i)\bfather\b', '', name)
+    name = re.sub(r'(?i)\\bfather\\b', '', name)
     name = name.replace('-', ' ')
     name = re.sub(r'[^a-zA-Z0-9\s]', '', name)
     return ' '.join(name.split())
@@ -143,24 +142,18 @@ def get_funding_blocks(df: pd.DataFrame, claim_until: str) -> Tuple[pd.DataFrame
     blocks['Start'] = pd.to_datetime(blocks['Start'])
     blocks['End'] = pd.to_datetime(blocks['End'])
 
-    # Compute total days for each (Hours, Rate) and pick the lowest hours among those with the max days
-    blocks['Days'] = (blocks['End'] - blocks['Start']).dt.days + 1
-    days_summary = blocks.groupby(['Hours', 'Rate'])['Days'].sum().reset_index()
-    max_days = days_summary['Days'].max()
-    base_block = days_summary[days_summary['Days'] == max_days].sort_values(by='Hours').iloc[0]
-    base_hours, base_rate = base_block['Hours'], base_block['Rate']
+    min_hours = blocks['Hours'].min()
+    base_candidates = blocks[blocks['Hours'] == min_hours]
+    base_rate = base_candidates['Rate'].mode().iloc[0] if not base_candidates.empty else 0
+    base_hours = min_hours
 
     blocks['Start'] = blocks['Start'].dt.strftime("%d/%m/%Y")
     blocks['End'] = blocks['End'].dt.strftime("%d/%m/%Y")
 
-    claim_start = blocks['Start'].min()
-    claim_end = blocks['End'].max()
+    claim_start = parsed['Start'].min().strftime("%d/%m/%Y")
+    claim_end = parsed['End'].max().strftime("%d/%m/%Y")
 
     return blocks, claim_start, claim_end, (base_hours, base_rate)
-
-# (main remains unchanged)
-
-
 
 def main():
     parser = argparse.ArgumentParser()
@@ -175,10 +168,7 @@ def main():
     print_status("Loading input files...")
     children_df = pd.read_excel(args.children)
     funding_df = pd.read_excel(args.funding)
-    if args.system.lower().endswith('.csv'):
-        system_df = pd.read_csv(args.system)
-    else:
-        system_df = pd.read_excel(args.system)
+    system_df = pd.read_csv(args.system) if args.system.lower().endswith('.csv') else pd.read_excel(args.system)
 
     unmatched = []
     name_map = {}
@@ -198,15 +188,14 @@ def main():
         unmatched_dicts = [{"Child Name": name, "CHICK": children_df.loc[children_df['Child'] == name, 'CHICK'].values[0]} for name in unmatched]
         matched = interactive_matching(unmatched_dicts, system_names)
         name_map.update(matched)
+        for original, corrected in matched.items():
+            children_df.loc[children_df['Child'] == original, 'Child'] = corrected
 
     for _, child in children_df.iterrows():
         name = child['Child']
         chick = child['CHICK']
         dob = child['Date of Birth']
         claim_until = child['Claim Until']
-
-        if name not in name_map:
-            continue
 
         child_funding = funding_df[funding_df['Child'] == name]
         blocks, claim_start, claim_end, base = get_funding_blocks(child_funding, str(claim_until))
@@ -215,23 +204,42 @@ def main():
 
         base_hours, base_rate = base
         uploader_rows.append({'Child': name, 'CHICK': chick, 'Date of Birth': dob, 'Claim Until': claim_end})
+
+        note = f"Base hours: {int(base_hours)}"
+        if len(blocks['Hours'].unique()) > 2:
+            note += "; more than two types of weekly hours"
+        if len(blocks['Rate'].unique()) > 1:
+            note += "; different hourly rates in CHICK"
+
         result_rows.append({
-            'Child': name, 'CHICK': chick, 'Date of Birth': dob, 'Claim Until': claim_end,
-            'Weekly Total': int(base_hours), 'Hour rate': f"€{base_rate:.2f}",
-            'Funding Start': claim_start
+            'Child': name,
+            'CHICK': chick,
+            'Date of Birth': dob,
+            'Claim Until': claim_end,
+            'Weekly Total': int(base_hours),
+            'Hour rate': f"€{base_rate:.2f}",
+            'Funding Start': claim_start,
+            'Note': note
         })
 
         for _, block in blocks.iterrows():
-            if (block['Hours'], block['Rate']) == base:
+            if float(block['Hours']) == base_hours:
                 continue
             diff = int(block['Hours'] - base_hours)
             if diff <= 0:
                 continue
+
             uploader_rows.append({'Child': name, 'CHICK': chick, 'Date of Birth': dob, 'Claim Until': block['End']})
+
             result_rows.append({
-                'Child': name, 'CHICK': chick, 'Date of Birth': dob, 'Claim Until': block['End'],
-                'Weekly Total': diff, 'Hour rate': f"€{block['Rate']:.2f}",
-                'Funding Start': block['Start']
+                'Child': name,
+                'CHICK': chick,
+                'Date of Birth': dob,
+                'Claim Until': block['End'],
+                'Weekly Total': diff,
+                'Hour rate': f"€{block['Rate']:.2f}",
+                'Funding Start': block['Start'],
+                'Note': f"Top-up +{diff}h"
             })
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -240,11 +248,19 @@ def main():
 
     unmatched_final = [u for u in unmatched if u not in name_map]
     if unmatched_final:
-        pd.DataFrame({'Unmatched': unmatched_final}).to_csv(os.path.join(args.output_dir, 'unmatchedChildren.csv'), index=False)
+        unmatched_dicts = [{"Child Name": name, "CHICK": children_df.loc[children_df['Child'] == name, 'CHICK'].values[0]} for name in unmatched_final]
+        enriched = []
+        for entry in unmatched_dicts:
+            suggestions = find_potential_matches(entry['Child Name'], system_names)
+            for i in range(5):
+                entry[f"Potential Match {i+1}"] = suggestions[i][0] if i < len(suggestions) else ""
+            enriched.append(entry)
+        pd.DataFrame(enriched).to_csv(os.path.join(args.output_dir, 'unmatchedChildren.csv'), index=False)
         print_status(f"Saved {len(unmatched_final)} unmatched children.", "warning")
 
     print_status("Done. Files saved to output folder.", "success")
 
 if __name__ == '__main__':
-    main() # — but ensure wherever autofiller file is written,
-# `blocks['Start']` is included in the export columns)
+    main()
+
+
