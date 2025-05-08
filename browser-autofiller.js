@@ -4,6 +4,21 @@
     totalMatches: 0
   };
 
+  const schoolHolidays = {
+    "2024-2025": {
+      "October Holidays": ["28/10/2024", "01/11/2024"],
+      "Christmas Holidays": ["23/12/2024", "03/01/2025"],
+      "February Holidays": ["17/02/2025", "21/02/2025"],
+      "Easter Holidays": ["14/04/2025", "25/04/2025"]
+    },
+    "2025-2026": {
+      "October Holidays": ["27/10/2025", "31/10/2025"],
+      "Christmas Holidays": ["22/12/2025", "02/01/2026"],
+      "February Holidays": ["16/02/2026", "20/02/2026"],
+      "Easter Holidays": ["30/03/2026", "10/04/2026"]
+    }
+  };
+
   createUI();
 
   function processCSV(file) {
@@ -12,7 +27,6 @@
       const csv = e.target.result;
       const data = parseCSV(csv);
 
-      // Index by CHICK + Claim Until
       data.forEach(row => {
         const key = row['CHICK'].trim() + "|" + row['Claim Until'].trim();
         if (!state.childrenByChickAndEnd[key]) {
@@ -69,19 +83,16 @@
     if (candidates.length === 1) {
       fillFields(row, candidates[0]);
       state.totalMatches++;
+      candidates.splice(0, 1);
     } else if (candidates.length > 1) {
-      // Pick one with matching Start date, if possible
       const inputStart = row.querySelector('input[name*="[date_from]"]');
       const startValue = inputStart?.value.trim();
       const exact = candidates.find(c => c['Funding Start']?.trim() === startValue);
 
-      if (exact) {
-        fillFields(row, exact);
-        state.totalMatches++;
-      } else {
-        fillFields(row, candidates[0]); // fallback to first
-        state.totalMatches++;
-      }
+      const toFill = exact || candidates[0];
+      fillFields(row, toFill);
+      state.totalMatches++;
+      candidates.splice(candidates.indexOf(toFill), 1);
     }
 
     setTimeout(() => processNextRow(rows, i + 1), 80);
@@ -95,12 +106,81 @@
         el.dispatchEvent(new Event('change', { bubbles: true }));
       }
     };
-
+  
     setInput('input[name*="[date_from]"]', data['Funding Start']);
     setInput('input[name*="[weekly_total]"]', data['Weekly Total']);
     setInput('input[name*="[hour_rate]"]', data['Hour rate']?.replace(/[^\d.]/g, ''));
+  
     row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    row.style.backgroundColor = 'rgba(76, 175, 80, 0.15)';
+  
+    const startDate = parseDate(data['Funding Start']);
+    const endDate = parseDate(data['Claim Until']);
+    const isBasePeriod = data.Note?.includes('Base');
+    const isOldPeriod = endDate && ((new Date() - endDate) / (1000 * 60 * 60 * 24) > 45); // older than 45 days
+  
+    // Apply color: Base (purple) > Old (red) > default (green)
+    if (isBasePeriod) {
+      row.style.backgroundColor = 'rgba(128, 0, 128, 0.15)'; // purple
+    } else if (isOldPeriod) {
+      row.style.backgroundColor = 'rgba(255, 0, 0, 0.15)'; // red
+    } else {
+      row.style.backgroundColor = 'rgba(76, 175, 80, 0.15)'; // green
+    }
+  
+    const lastTd = row.querySelector('td:last-child');
+    if (!lastTd) return;
+  
+    // Notes badge
+    if (data.Note && data.Note.includes(';')) {
+      const note = data.Note.split(';').slice(1).join(';').trim();
+      if (note) {
+        const badge = document.createElement('div');
+        badge.textContent = note;
+        badge.style.cssText = 'color:#fff;background:#ff9800;padding:2px 6px;margin-top:4px;border-radius:4px;display:inline-block;font-size:12px';
+        lastTd.appendChild(badge);
+      }
+    }
+  
+    // Holiday badge
+    if (startDate) {
+      const holiday = getHolidayName(startDate);
+      if (holiday) {
+        const badge = document.createElement('div');
+        badge.textContent = holiday;
+        badge.style.cssText = 'color:#fff;background:#00bcd4;padding:2px 6px;margin-top:4px;margin-left:4px;border-radius:4px;display:inline-block;font-size:12px';
+        lastTd.appendChild(badge);
+      }
+    }
+  }
+  
+  
+
+  function getHolidayName(date) {
+    const summerStart = getFirstMondayBeforeOrOn(new Date(date.getFullYear(), 6, 1)); // July
+    const summerEnd = getFirstMondayBeforeOrOn(new Date(date.getFullYear(), 8, 1));   // September
+    if (date >= summerStart && date < summerEnd) return "Summer Holidays";
+
+    for (const year of Object.keys(schoolHolidays)) {
+      for (const [name, [startStr, endStr]] of Object.entries(schoolHolidays[year])) {
+        const start = parseDate(startStr);
+        const end = parseDate(endStr);
+        if (date >= start && date <= end) return name;
+      }
+    }
+    return null;
+  }
+
+  function getFirstMondayBeforeOrOn(date) {
+    const result = new Date(date);
+    while (result.getDay() !== 1) {
+      result.setDate(result.getDate() - 1);
+    }
+    return result;
+  }
+
+  function parseDate(str) {
+    const [dd, mm, yyyy] = str.split('/');
+    return new Date(`${yyyy}-${mm}-${dd}`);
   }
 
   function createUI() {
@@ -132,4 +212,3 @@
     }
   }
 })();
-// This script is designed to be run in the context of a web page.
