@@ -62,10 +62,10 @@
     if (!rows.length) return updateStatus('No rows found', 'error');
 
     updateStatus(`Found ${rows.length} rows`, 'info');
-    processNextRow(rows, 0);
+    processNextRow(rows, 0, null);
   }
 
-  function processNextRow(rows, i) {
+  function processNextRow(rows, i, previousChick) {
     if (i >= rows.length) return updateStatus(`Finished. ${state.totalMatches} rows matched`, 'success');
 
     const row = rows[i];
@@ -74,7 +74,12 @@
 
     if (!chick || !claimUntil) {
       console.warn("Missing CHICK or Claim Until at row", i);
-      return processNextRow(rows, i + 1);
+      return processNextRow(rows, i + 1, previousChick);
+    }
+
+    // Add border between different children
+    if (chick !== previousChick) {
+      row.style.borderTop = '3px solid #444';
     }
 
     const key = chick + "|" + claimUntil;
@@ -95,7 +100,7 @@
       candidates.splice(candidates.indexOf(toFill), 1);
     }
 
-    setTimeout(() => processNextRow(rows, i + 1), 80);
+    setTimeout(() => processNextRow(rows, i + 1, chick), 80);
   }
 
   function fillFields(row, data) {
@@ -106,30 +111,31 @@
         el.dispatchEvent(new Event('change', { bubbles: true }));
       }
     };
-  
+
     setInput('input[name*="[date_from]"]', data['Funding Start']);
     setInput('input[name*="[weekly_total]"]', data['Weekly Total']);
     setInput('input[name*="[hour_rate]"]', data['Hour rate']?.replace(/[^\d.]/g, ''));
-  
+
     row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  
+
     const startDate = parseDate(data['Funding Start']);
     const endDate = parseDate(data['Claim Until']);
     const isBasePeriod = data.Note?.includes('Base');
-    const isOldPeriod = endDate && ((new Date() - endDate) / (1000 * 60 * 60 * 24) > 45); // older than 45 days
-  
-    // Apply color: Base (purple) > Old (red) > default (green)
+    const isOldPeriod = endDate && ((new Date() - endDate) / (1000 * 60 * 60 * 24) > 90); // older than 3 months
+
+    // Visual style
     if (isBasePeriod) {
-      row.style.backgroundColor = 'rgba(128, 0, 128, 0.15)'; // purple
+      row.style.fontWeight = 'bold';
+      row.style.borderLeft = '4px solid purple';
     } else if (isOldPeriod) {
       row.style.backgroundColor = 'rgba(255, 0, 0, 0.15)'; // red
     } else {
       row.style.backgroundColor = 'rgba(76, 175, 80, 0.15)'; // green
     }
-  
+
     const lastTd = row.querySelector('td:last-child');
     if (!lastTd) return;
-  
+
     // Notes badge
     if (data.Note && data.Note.includes(';')) {
       const note = data.Note.split(';').slice(1).join(';').trim();
@@ -140,7 +146,7 @@
         lastTd.appendChild(badge);
       }
     }
-  
+
     // Holiday badge
     if (startDate) {
       const holiday = getHolidayName(startDate);
@@ -152,12 +158,10 @@
       }
     }
   }
-  
-  
 
   function getHolidayName(date) {
-    const summerStart = getFirstMondayBeforeOrOn(new Date(date.getFullYear(), 6, 1)); // July
-    const summerEnd = getFirstMondayBeforeOrOn(new Date(date.getFullYear(), 8, 1));   // September
+    const summerStart = getFirstMondayBeforeOrOn(new Date(date.getFullYear(), 6, 1));
+    const summerEnd = getFirstMondayBeforeOrOn(new Date(date.getFullYear(), 8, 1));
     if (date >= summerStart && date < summerEnd) return "Summer Holidays";
 
     for (const year of Object.keys(schoolHolidays)) {
